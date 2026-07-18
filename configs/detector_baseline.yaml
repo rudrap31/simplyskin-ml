@@ -1,0 +1,27 @@
+# Faster R-CNN (ResNet-50 FPN) baseline on ACNE04, fold 0.
+# Optimized for a working, reproducible first run — not accuracy.
+
+model_name: fasterrcnn_resnet50_fpn
+num_classes: 2          # background + lesion
+pretrained: true
+
+fold: 0
+val_ratio: 0.15
+seed: 42
+
+batch_size: 2
+num_workers: 2
+epochs: 15
+
+# SGD + step decay: torchvision's standard detection finetuning recipe
+lr: 0.005
+momentum: 0.9
+weight_decay: 0.0005
+lr_step_size: 8
+lr_gamma: 0.1
+
+score_threshold: 0.5    # operating point for precision/recall reporting
+log_interval: 20
+
+device: auto             # auto picks mps > cuda > cpu
+output_dir: runs/detector_baseline

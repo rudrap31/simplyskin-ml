@@ -16,7 +16,7 @@ ID_TO_BROAD_NAME = {i + 1: name for i, name in enumerate(BROAD_CLASSES)}
 
 
 def visualize_acne04(n: int = 12, seed: int = 0):
-    ds = Acne04Detection(fold=0, split="trainval")
+    ds = Acne04Detection(fold=0, split="train")
     rng = random.Random(seed)
     indices = rng.sample(range(len(ds)), n)
 

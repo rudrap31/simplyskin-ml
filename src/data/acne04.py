@@ -1,4 +1,5 @@
 """ACNE04 dataset: Pascal VOC lesion detection annotations."""
+import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def parse_voc_annotation(xml_path: Path) -> dict:
 def load_split_ids(fold: int, split: str) -> list[str]:
     """Load image ids (no extension) for a given fold (0-4) and split.
 
-    split is 'trainval' or 'test'.
+    split is 'trainval' or 'test' — these are ACNE04's official files.
     """
     assert split in ("trainval", "test")
     split_file = SPLITS_DIR / f"NNEW_{split}_{fold}.txt"
@@ -58,16 +59,48 @@ def load_split_ids(fold: int, split: str) -> list[str]:
     return ids
 
 
+def split_trainval(fold: int, val_ratio: float = 0.15, seed: int = 42) -> tuple[list[str], list[str]]:
+    """Deterministically split the official trainval ids into train/val.
+
+    The official test fold is never touched here — this only carves an
+    internal validation set out of trainval for model selection.
+    """
+    ids = load_split_ids(fold, "trainval")
+    ids = sorted(ids)  # sort first so shuffle result is independent of filesystem order
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+
+    n_val = int(len(ids) * val_ratio)
+    val_ids = sorted(ids[:n_val])
+    train_ids = sorted(ids[n_val:])
+    return train_ids, val_ids
+
+
 class Acne04Detection(Dataset):
     """Lesion detection dataset. Returns (image, target) pairs.
 
     target is a dict with 'boxes' (N,4 xyxy float tensor), 'labels' (N,
     all LESION_CLASS_ID), and 'image_id'/'severity'/'lesion_count' for
     bookkeeping — matches the format torchvision detection models expect.
+
+    split: 'train' and 'val' are carved out of the official trainval file
+    (see split_trainval); 'test' is the official, untouched held-out fold.
     """
 
-    def __init__(self, fold: int = 0, split: str = "trainval", transforms=None):
-        self.ids = load_split_ids(fold, split)
+    def __init__(
+        self,
+        fold: int = 0,
+        split: str = "train",
+        transforms=None,
+        val_ratio: float = 0.15,
+        seed: int = 42,
+    ):
+        assert split in ("train", "val", "test")
+        if split == "test":
+            self.ids = load_split_ids(fold, "test")
+        else:
+            train_ids, val_ids = split_trainval(fold, val_ratio=val_ratio, seed=seed)
+            self.ids = train_ids if split == "train" else val_ids
         self.transforms = transforms
 
     def __len__(self) -> int:

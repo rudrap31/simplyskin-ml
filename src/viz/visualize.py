@@ -10,6 +10,8 @@ CLASS_COLORS = {
     "inflammatory_like": (245, 66, 66),
     "deeper_inflammatory_like": (156, 39, 176),
     "non_active_acne": (128, 128, 128),
+    "gt": (0, 220, 0),
+    "pred": (255, 165, 0),
 }
 DEFAULT_COLOR = (0, 200, 0)
 
