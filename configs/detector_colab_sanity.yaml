@@ -1,0 +1,32 @@
+# Short GPU sanity run on ACNE04 fold 0.
+# Confirms CUDA training, memory usage, validation, and checkpoint saving.
+
+model_name: fasterrcnn_resnet50_fpn
+num_classes: 2
+pretrained: true
+
+fold: 0
+val_ratio: 0.15
+seed: 42
+
+batch_size: 2
+num_workers: 2
+epochs: 2
+
+# Acne lesions are small, so preserve more resolution than the CPU smoke test.
+min_size: 600
+max_size: 1000
+
+lr: 0.005
+momentum: 0.9
+weight_decay: 0.0005
+lr_step_size: 8
+lr_gamma: 0.1
+
+score_threshold: 0.5
+log_interval: 20
+
+device: cuda
+mixed_precision: true
+
+output_dir: /content/drive/MyDrive/SimplySkinML/runs/detector_colab_sanity

@@ -6,35 +6,45 @@ import torch
 from src.train.metrics import compute_map, compute_precision_recall
 
 
-def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 20):
+def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 20, mixed_precision: bool = False):
     """One epoch of training. Returns dict of average losses.
 
     Raises if a non-finite loss/gradient shows up — silently continuing
     training on NaN losses just wastes time and hides the real bug.
+
+    mixed_precision only takes effect on CUDA (autocast on CPU/MPS isn't
+    reliably beneficial/supported for this model, so it's a no-op there).
     """
     model.train()
     loss_sums = {}
     n_batches = 0
 
+    use_amp = mixed_precision and device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
     for i, (images, targets) in enumerate(data_loader):
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
-        losses = sum(loss_dict.values())
+        with torch.autocast(device_type="cuda", enabled=use_amp):
+            loss_dict = model(images, targets)
+            losses = sum(loss_dict.values())
 
         loss_value = losses.item()
         if not math.isfinite(loss_value):
             raise RuntimeError(f"Non-finite loss at batch {i}: {loss_value}, components={loss_dict}")
 
         optimizer.zero_grad()
-        losses.backward()
+        scaler.scale(losses).backward()
 
+        if use_amp:
+            scaler.unscale_(optimizer)
         for name, param in model.named_parameters():
             if param.grad is not None and not torch.isfinite(param.grad).all():
                 raise RuntimeError(f"Non-finite gradient in {name} at batch {i}")
 
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         for k, v in loss_dict.items():
             loss_sums[k] = loss_sums.get(k, 0.0) + v.item()
@@ -48,7 +58,7 @@ def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 2
 
 
 @torch.no_grad()
-def compute_val_loss(model, data_loader, device) -> dict:
+def compute_val_loss(model, data_loader, device, mixed_precision: bool = False) -> dict:
     """Detection models only return losses in train() mode. Running that
     forward pass under no_grad computes the loss without updating weights.
     Safe for this project's backbone: torchvision detection models use
@@ -56,12 +66,14 @@ def compute_val_loss(model, data_loader, device) -> dict:
     model.train()
     loss_sums = {}
     n_batches = 0
+    use_amp = mixed_precision and device.type == "cuda"
 
     for images, targets in data_loader:
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
+        with torch.autocast(device_type="cuda", enabled=use_amp):
+            loss_dict = model(images, targets)
         for k, v in loss_dict.items():
             loss_sums[k] = loss_sums.get(k, 0.0) + v.item()
         loss_sums["total_loss"] = loss_sums.get("total_loss", 0.0) + sum(v.item() for v in loss_dict.values())
@@ -71,17 +83,19 @@ def compute_val_loss(model, data_loader, device) -> dict:
 
 
 @torch.no_grad()
-def evaluate(model, data_loader, device, score_threshold: float = 0.5) -> dict:
+def evaluate(model, data_loader, device, score_threshold: float = 0.5, mixed_precision: bool = False) -> dict:
     """Full validation/test pass: val loss + mAP + precision/recall."""
-    val_loss = compute_val_loss(model, data_loader, device)
+    val_loss = compute_val_loss(model, data_loader, device, mixed_precision=mixed_precision)
 
     model.eval()
     all_predictions = []
     all_targets = []
+    use_amp = mixed_precision and device.type == "cuda"
 
     for images, targets in data_loader:
         images = [img.to(device) for img in images]
-        outputs = model(images)
+        with torch.autocast(device_type="cuda", enabled=use_amp):
+            outputs = model(images)
 
         for out, target in zip(outputs, targets):
             all_predictions.append(

@@ -39,12 +39,15 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def build_dataloaders(cfg: dict):
+    min_size = cfg.get("min_size")
+    max_size = cfg.get("max_size")
+
     train_ds = Acne04Detection(
-        fold=cfg["fold"], split="train", transforms=get_transform(train=True),
+        fold=cfg["fold"], split="train", transforms=get_transform(train=True, min_size=min_size, max_size=max_size),
         val_ratio=cfg["val_ratio"], seed=cfg["seed"],
     )
     val_ds = Acne04Detection(
-        fold=cfg["fold"], split="val", transforms=get_transform(train=False),
+        fold=cfg["fold"], split="val", transforms=get_transform(train=False, min_size=min_size, max_size=max_size),
         val_ratio=cfg["val_ratio"], seed=cfg["seed"],
     )
 
@@ -63,6 +66,8 @@ def train(cfg: dict, output_dir: Path):
     set_seed(cfg["seed"])
     device = resolve_device(cfg["device"])
     print(f"Using device: {device}")
+    if cfg.get("mixed_precision", False) and device.type != "cuda":
+        print("Note: mixed_precision=true has no effect on this device (only CUDA is supported); running in full precision.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / "config.yaml", "w") as f:
@@ -71,7 +76,13 @@ def train(cfg: dict, output_dir: Path):
     train_loader, val_loader = build_dataloaders(cfg)
     print(f"train images: {len(train_loader.dataset)}  val images: {len(val_loader.dataset)}")
 
-    model = build_model(cfg["model_name"], num_classes=cfg["num_classes"], pretrained=cfg["pretrained"])
+    model = build_model(
+        cfg["model_name"],
+        num_classes=cfg["num_classes"],
+        pretrained=cfg["pretrained"],
+        min_size=cfg.get("min_size"),
+        max_size=cfg.get("max_size"),
+    )
     model.to(device)
 
     params = [p for p in model.parameters() if p.requires_grad]
@@ -86,10 +97,16 @@ def train(cfg: dict, output_dir: Path):
         start = time.time()
         print(f"\nEpoch {epoch + 1}/{cfg['epochs']}")
 
-        train_losses = train_one_epoch(model, optimizer, train_loader, device, log_interval=cfg["log_interval"])
+        train_losses = train_one_epoch(
+            model, optimizer, train_loader, device,
+            log_interval=cfg["log_interval"], mixed_precision=cfg.get("mixed_precision", False),
+        )
         scheduler.step()
 
-        val_metrics = evaluate(model, val_loader, device, score_threshold=cfg["score_threshold"])
+        val_metrics = evaluate(
+            model, val_loader, device,
+            score_threshold=cfg["score_threshold"], mixed_precision=cfg.get("mixed_precision", False),
+        )
 
         elapsed = time.time() - start
         record = {
