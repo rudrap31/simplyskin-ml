@@ -27,4 +27,9 @@ log_interval: 20
 device: cuda
 mixed_precision: true
 
+# Local Colab disk, not Drive — Drive I/O is slow enough to bottleneck
+# training when reading thousands of small images per epoch. Upload/copy
+# the dataset here each session; only outputs below go to Drive.
+data_root: /content/datasets/acne04
+
 output_dir: /content/drive/MyDrive/SimplySkinML/runs/detector_colab_baseline

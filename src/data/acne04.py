@@ -7,10 +7,22 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-DATASET_ROOT = Path(__file__).resolve().parents[2] / "datasets" / "acne04"
-IMAGES_DIR = DATASET_ROOT / "Classification" / "JPEGImages"
-ANNOTATIONS_DIR = DATASET_ROOT / "Detection" / "VOC2007" / "Annotations"
-SPLITS_DIR = DATASET_ROOT / "Detection" / "VOC2007" / "ImageSets" / "Main"
+DEFAULT_DATASET_ROOT = Path(__file__).resolve().parents[2] / "datasets" / "acne04"
+
+
+def _resolve_dirs(data_root: str | Path | None = None) -> tuple[Path, Path, Path]:
+    """data_root overrides the default repo-relative datasets/acne04 path —
+    e.g. pointing at a Colab-local or Drive-mounted copy of the dataset."""
+    root = Path(data_root) if data_root is not None else DEFAULT_DATASET_ROOT
+    images_dir = root / "Classification" / "JPEGImages"
+    annotations_dir = root / "Detection" / "VOC2007" / "Annotations"
+    splits_dir = root / "Detection" / "VOC2007" / "ImageSets" / "Main"
+    return images_dir, annotations_dir, splits_dir
+
+
+# module-level defaults, kept for backwards compatibility with any code
+# that imports these directly instead of going through data_root params
+IMAGES_DIR, ANNOTATIONS_DIR, SPLITS_DIR = _resolve_dirs()
 
 # ACNE04 boxes are a single generic lesion class ("fore"). Background is 0
 # so the detector's foreground class id is 1.
@@ -41,13 +53,14 @@ def parse_voc_annotation(xml_path: Path) -> dict:
     return {"width": width, "height": height, "boxes": boxes}
 
 
-def load_split_ids(fold: int, split: str) -> list[str]:
+def load_split_ids(fold: int, split: str, data_root: str | Path | None = None) -> list[str]:
     """Load image ids (no extension) for a given fold (0-4) and split.
 
     split is 'trainval' or 'test' — these are ACNE04's official files.
     """
     assert split in ("trainval", "test")
-    split_file = SPLITS_DIR / f"NNEW_{split}_{fold}.txt"
+    _, _, splits_dir = _resolve_dirs(data_root)
+    split_file = splits_dir / f"NNEW_{split}_{fold}.txt"
     ids = []
     with open(split_file) as f:
         for line in f:
@@ -59,13 +72,15 @@ def load_split_ids(fold: int, split: str) -> list[str]:
     return ids
 
 
-def split_trainval(fold: int, val_ratio: float = 0.15, seed: int = 42) -> tuple[list[str], list[str]]:
+def split_trainval(
+    fold: int, val_ratio: float = 0.15, seed: int = 42, data_root: str | Path | None = None
+) -> tuple[list[str], list[str]]:
     """Deterministically split the official trainval ids into train/val.
 
     The official test fold is never touched here — this only carves an
     internal validation set out of trainval for model selection.
     """
-    ids = load_split_ids(fold, "trainval")
+    ids = load_split_ids(fold, "trainval", data_root=data_root)
     ids = sorted(ids)  # sort first so shuffle result is independent of filesystem order
     rng = random.Random(seed)
     rng.shuffle(ids)
@@ -94,12 +109,14 @@ class Acne04Detection(Dataset):
         transforms=None,
         val_ratio: float = 0.15,
         seed: int = 42,
+        data_root: str | Path | None = None,
     ):
         assert split in ("train", "val", "test")
+        self.images_dir, self.annotations_dir, _ = _resolve_dirs(data_root)
         if split == "test":
-            self.ids = load_split_ids(fold, "test")
+            self.ids = load_split_ids(fold, "test", data_root=data_root)
         else:
-            train_ids, val_ids = split_trainval(fold, val_ratio=val_ratio, seed=seed)
+            train_ids, val_ids = split_trainval(fold, val_ratio=val_ratio, seed=seed, data_root=data_root)
             self.ids = train_ids if split == "train" else val_ids
         self.transforms = transforms
 
@@ -108,8 +125,8 @@ class Acne04Detection(Dataset):
 
     def __getitem__(self, idx: int):
         image_id = self.ids[idx]
-        image_path = IMAGES_DIR / f"{image_id}.jpg"
-        ann_path = ANNOTATIONS_DIR / f"{image_id}.xml"
+        image_path = self.images_dir / f"{image_id}.jpg"
+        ann_path = self.annotations_dir / f"{image_id}.xml"
 
         image = Image.open(image_path).convert("RGB")
         ann = parse_voc_annotation(ann_path)

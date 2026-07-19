@@ -6,7 +6,7 @@ import torch
 from src.train.metrics import compute_map, compute_precision_recall
 
 
-def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 20, mixed_precision: bool = False):
+def train_one_epoch(model, optimizer, data_loader, device, scaler, log_interval: int = 20, mixed_precision: bool = False):
     """One epoch of training. Returns dict of average losses.
 
     Raises if a non-finite loss/gradient shows up — silently continuing
@@ -14,13 +14,17 @@ def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 2
 
     mixed_precision only takes effect on CUDA (autocast on CPU/MPS isn't
     reliably beneficial/supported for this model, so it's a no-op there).
+
+    scaler is created once by the caller (not here) and passed in across
+    epochs, so its growth/backoff state persists across epochs and can be
+    saved/restored for resume — a scaler recreated every epoch would lose
+    that state each time.
     """
     model.train()
     loss_sums = {}
     n_batches = 0
 
     use_amp = mixed_precision and device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     for i, (images, targets) in enumerate(data_loader):
         images = [img.to(device) for img in images]
@@ -37,8 +41,10 @@ def train_one_epoch(model, optimizer, data_loader, device, log_interval: int = 2
         optimizer.zero_grad()
         scaler.scale(losses).backward()
 
-        if use_amp:
-            scaler.unscale_(optimizer)
+        # unscale_() is a documented no-op when the scaler is disabled
+        # (use_amp=False), so this ordering is correct in both modes:
+        # scale -> backward -> unscale -> inspect real gradients -> step -> update
+        scaler.unscale_(optimizer)
         for name, param in model.named_parameters():
             if param.grad is not None and not torch.isfinite(param.grad).all():
                 raise RuntimeError(f"Non-finite gradient in {name} at batch {i}")

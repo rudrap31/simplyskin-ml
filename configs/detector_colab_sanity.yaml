@@ -29,4 +29,6 @@ log_interval: 20
 device: cuda
 mixed_precision: true
 
+data_root: /content/datasets/acne04
+
 output_dir: /content/drive/MyDrive/SimplySkinML/runs/detector_colab_sanity
