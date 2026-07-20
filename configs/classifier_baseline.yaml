@@ -15,7 +15,6 @@ lr_gamma: 0.5
 
 class_weighting: true
 early_stopping_patience: 8
-selection_metric: val_macro_f1
 log_interval: 20
 
 device: auto

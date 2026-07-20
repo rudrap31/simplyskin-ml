@@ -186,10 +186,14 @@ def build_crops_and_manifest(padding: float = 0.15, seed: int = 42, ratios=(0.7,
 
 
 def compute_class_weights(class_counts_train: dict) -> torch.Tensor:
-    """Inverse-frequency weights (normalized to mean 1) over BROAD_CLASSES
-    order, computed from the training split only."""
+    """Square-root inverse-frequency weights (normalized to mean 1) over
+    BROAD_CLASSES order, computed from the training split only.
+    weight[c] = 1 / sqrt(train_count[c]), then rescaled so the four
+    weights average to 1. Softer than plain inverse frequency — keeps the
+    rarest class (deeper_inflammatory_like) upweighted without letting it
+    dominate the loss as much as full 1/count would."""
     counts = torch.tensor([max(class_counts_train.get(c, 0), 1) for c in BROAD_CLASSES], dtype=torch.float32)
-    weights = 1.0 / counts
+    weights = 1.0 / torch.sqrt(counts)
     weights = weights * (len(weights) / weights.sum())
     return weights
 

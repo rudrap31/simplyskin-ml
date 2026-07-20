@@ -107,6 +107,7 @@ def _train(cfg: dict, output_dir: Path, resume: bool = False):
     model = build_model(cfg["model_name"], num_classes=cfg["num_classes"], pretrained=cfg["pretrained"])
     model.to(device)
 
+    class_weights_dict = None
     if cfg.get("class_weighting", True):
         from collections import Counter
         import csv as csv_module
@@ -115,7 +116,10 @@ def _train(cfg: dict, output_dir: Path, resume: bool = False):
             rows = list(csv_module.DictReader(f))
         train_counts = dict(Counter(r["mapped_class"] for r in rows if r["split"] == "train"))
         weights = compute_class_weights(train_counts).to(device)
-        print(f"Class weights (train split, inverse-frequency): {dict(zip(class_names, weights.tolist()))}")
+        class_weights_dict = dict(zip(class_names, weights.tolist()))
+        print(f"Class weights (train split, sqrt-inverse-frequency, normalized to mean 1): {class_weights_dict}")
+        with open(output_dir / "class_weights.json", "w") as f:
+            json.dump(class_weights_dict, f, indent=2)
         criterion = torch.nn.CrossEntropyLoss(weight=weights)
     else:
         criterion = torch.nn.CrossEntropyLoss()
@@ -201,6 +205,7 @@ def _train(cfg: dict, output_dir: Path, resume: bool = False):
                     "val_macro_f1": best_macro_f1,
                     "config": cfg,
                     "class_names": class_names,
+                    "class_weights": class_weights_dict,
                 },
                 output_dir / "best.pth",
             )
@@ -219,6 +224,7 @@ def _train(cfg: dict, output_dir: Path, resume: bool = False):
                 "epochs_since_improvement": epochs_since_improvement,
                 "config": cfg,
                 "class_names": class_names,
+                "class_weights": class_weights_dict,
             },
             last_ckpt_path,
         )
@@ -231,11 +237,22 @@ def _train(cfg: dict, output_dir: Path, resume: bool = False):
             break
 
     torch.save(
-        {"model_state_dict": model.state_dict(), "epoch": epoch + 1, "config": cfg, "class_names": class_names},
+        {
+            "model_state_dict": model.state_dict(),
+            "epoch": epoch + 1,
+            "config": cfg,
+            "class_names": class_names,
+            "class_weights": class_weights_dict,
+        },
         output_dir / "final.pth",
     )
 
-    summary = {"best_epoch": best_epoch, "best_val_macro_f1": best_macro_f1, "total_epochs_run": epoch + 1}
+    summary = {
+        "best_epoch": best_epoch,
+        "best_val_macro_f1": best_macro_f1,
+        "total_epochs_run": epoch + 1,
+        "class_weights": class_weights_dict,
+    }
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
