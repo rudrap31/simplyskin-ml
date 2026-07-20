@@ -45,9 +45,24 @@ def train_one_epoch(model, optimizer, data_loader, device, scaler, log_interval:
         # (use_amp=False), so this ordering is correct in both modes:
         # scale -> backward -> unscale -> inspect real gradients -> step -> update
         scaler.unscale_(optimizer)
+
+        non_finite_param = None
         for name, param in model.named_parameters():
             if param.grad is not None and not torch.isfinite(param.grad).all():
-                raise RuntimeError(f"Non-finite gradient in {name} at batch {i}")
+                non_finite_param = name
+                break
+
+        if non_finite_param is not None:
+            if use_amp:
+                # Expected occasionally under fp16 autocast (intermediate
+                # overflow), not necessarily a real bug like it would be in
+                # FP32. GradScaler.step() detects this itself (it tracks
+                # inf/nan during unscale_) and skips optimizer.step(); update()
+                # then backs off the scale so future steps are less likely to
+                # overflow. Don't raise here — that's the whole point of AMP.
+                print(f"  batch {i}: non-finite gradient in {non_finite_param}, AMP step skipped, scale reduced")
+            else:
+                raise RuntimeError(f"Non-finite gradient in {non_finite_param} at batch {i}")
 
         scaler.step(optimizer)
         scaler.update()

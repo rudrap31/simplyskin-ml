@@ -32,6 +32,13 @@ def build_faster_rcnn_resnet50_fpn(
         kwargs["min_size"] = min_size
     if max_size is not None:
         kwargs["max_size"] = max_size
+    if not pretrained:
+        # torchvision's weights_backbone defaults to pretrained ImageNet
+        # weights independently of `weights`, so pretrained=False would
+        # otherwise still trigger a backbone download — pointless (and
+        # broken offline) when the caller is about to load_state_dict()
+        # a fully trained checkpoint anyway.
+        kwargs["weights_backbone"] = None
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights=weights, **kwargs)
 
     in_features = model.roi_heads.box_predictor.cls_score.in_features
