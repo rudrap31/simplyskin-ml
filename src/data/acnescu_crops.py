@@ -103,53 +103,66 @@ def build_crops_and_manifest(padding: float = 0.15, seed: int = 42, ratios=(0.7,
     for cls in BROAD_CLASSES:
         (CROPS_DIR / cls).mkdir(parents=True, exist_ok=True)
 
-    # cache opened images (PIL lazy-loads, but re-opening per annotation is fine size-wise)
     manifest_rows = []
     rejected = {"other_dropped": 0, "degenerate_box": 0, "missing_image": 0}
     anns_by_image = defaultdict(list)  # for dominant-class computation
 
+    # Group annotations by source image first, so each image is opened and
+    # decoded exactly once (annotation-order iteration re-opened/re-decoded
+    # the same JPEG once per annotation on it — 275 images / 31.5k
+    # annotations means ~114 redundant re-decodes per image on average,
+    # which is what made this slow, especially over Drive-mounted I/O).
+    anns_grouped_by_image = defaultdict(list)
     for ann in raw["annotations"]:
-        raw_name = raw_id_to_name[ann["category_id"]]
-        mapped_class = RAW_TO_BROAD.get(raw_name)
-        if mapped_class is None:
-            rejected["other_dropped"] += 1
-            continue
+        anns_grouped_by_image[ann["image_id"]].append(ann)
 
-        img_info = images_by_id[ann["image_id"]]
+    for image_id, anns in anns_grouped_by_image.items():
+        img_info = images_by_id[image_id]
         image_path = IMAGES_DIR / img_info["file_name"]
-        if not image_path.exists():
-            rejected["missing_image"] += 1
-            continue
 
-        box = pad_and_clamp_box(ann["bbox"], img_info["width"], img_info["height"], padding)
-        if box is None:
-            rejected["degenerate_box"] += 1
-            continue
+        opened_image = None
+        if image_path.exists():
+            with Image.open(image_path) as im:
+                opened_image = im.convert("RGB")
 
-        crop_filename = f"{ann['id']}.jpg"
-        crop_path = CROPS_DIR / mapped_class / crop_filename
+        for ann in anns:
+            raw_name = raw_id_to_name[ann["category_id"]]
+            mapped_class = RAW_TO_BROAD.get(raw_name)
+            if mapped_class is None:
+                rejected["other_dropped"] += 1
+                continue
 
-        with Image.open(image_path) as im:
-            im = im.convert("RGB")
-            crop = im.crop((box[0], box[1], box[2], box[3]))
+            if opened_image is None:
+                rejected["missing_image"] += 1
+                continue
+
+            box = pad_and_clamp_box(ann["bbox"], img_info["width"], img_info["height"], padding)
+            if box is None:
+                rejected["degenerate_box"] += 1
+                continue
+
+            crop_filename = f"{ann['id']}.jpg"
+            crop_path = CROPS_DIR / mapped_class / crop_filename
+
+            crop = opened_image.crop((box[0], box[1], box[2], box[3]))
             crop.save(crop_path, quality=95)
 
-        row = {
-            "annotation_id": ann["id"],
-            "source_image_id": ann["image_id"],
-            "source_image_path": str(image_path.relative_to(DATASET_ROOT.parents[1])),
-            "original_category": raw_name,
-            "mapped_class": mapped_class,
-            "bbox_x1": box[0],
-            "bbox_y1": box[1],
-            "bbox_x2": box[2],
-            "bbox_y2": box[3],
-            "crop_path": str(crop_path.relative_to(DATASET_ROOT.parents[1])),
-            "split": None,  # filled in below
-            "seed": seed,
-        }
-        manifest_rows.append(row)
-        anns_by_image[ann["image_id"]].append(mapped_class)
+            row = {
+                "annotation_id": ann["id"],
+                "source_image_id": ann["image_id"],
+                "source_image_path": str(image_path.relative_to(DATASET_ROOT.parents[1])),
+                "original_category": raw_name,
+                "mapped_class": mapped_class,
+                "bbox_x1": box[0],
+                "bbox_y1": box[1],
+                "bbox_x2": box[2],
+                "bbox_y2": box[3],
+                "crop_path": str(crop_path.relative_to(DATASET_ROOT.parents[1])),
+                "split": None,  # filled in below
+                "seed": seed,
+            }
+            manifest_rows.append(row)
+            anns_by_image[ann["image_id"]].append(mapped_class)
 
     # dominant class per source image (for stratified splitting)
     images_by_dominant_class = defaultdict(list)
