@@ -1,0 +1,82 @@
+# classifier_v2: fine-tune classifier_v1's best.pth with crop-scale
+# augmentation (see src/scripts/crop_scale_diagnostic.py for the
+# diagnostic that motivated this — v1 was only ever trained on AcneSCU's
+# tight, 15%-padded annotation boxes, but the live pipeline feeds it much
+# looser detector boxes, and predictions shift heavily toward
+# non_active_acne / deeper_inflammatory_like as a result).
+#
+# Not trained from scratch: finetune_from loads classifier_v1's weights
+# as the starting point. train_crop_augmentation: multi_scale switches
+# the train loader to AcneSCUMultiScaleCropDataset, which re-crops each
+# training example from its full source image at a randomly chosen scale
+# every epoch:
+#   1.0x manifest box (p=0.25) -> ~1.3x  the raw AcneSCU annotation
+#   1.5x manifest box (p=0.35) -> ~1.95x the raw AcneSCU annotation
+#   2.0x manifest box (p=0.40) -> ~2.6x  the raw AcneSCU annotation
+# (the manifest box is already 15%-padded per side, i.e. (1+2*0.15)=1.3x
+# the raw annotation — NOT 1.15x; a naive "+15%" reading of the padding
+# parameter undercounts this, see src/data/acnescu_crops.py's docstring).
+# Expanded scales also get a random center shift (a detector box is
+# rarely perfectly centered on the lesion the way a hand-annotated one
+# is). The held-out TEST set is completely untouched by any of this.
+#
+# Validation uses TWO fixed sets, both reported every epoch:
+#   val_tight_macro_f1   - the original AcneSCUCropDataset crop, same
+#                           protocol as v1, for direct v1-vs-v2 comparison
+#   val_context_macro_f1 - a SECOND, precomputed, deterministic set of
+#                           detector-style (expanded) crops — generate it
+#                           once with src/scripts/build_val_context_crops.py
+#                           before training. NOT re-randomized per epoch.
+# best.pth is selected by checkpoint_selection_metric below (combining
+# both), not by val_tight_macro_f1 alone — the whole point of v2 is to do
+# well on detector-style crops, but val_tight_macro_f1 still acts as a
+# regression guard (warned on in training logs if it collapses).
+#
+# All paths are repository-relative; override with --output-dir /
+# --manifest-path from the command line (e.g. on Colab).
+
+model_name: efficientnet_b0
+num_classes: 4
+pretrained: false  # irrelevant — finetune_from overwrites all weights immediately after init
+input_size: 224
+
+seed: 42
+batch_size: 32
+num_workers: 2
+epochs: 10
+
+# smaller lr than v1's fresh-training 0.0003 — this is fine-tuning an
+# already-converged model, not training from random/ImageNet init
+lr: 0.00005
+weight_decay: 0.0001
+lr_step_size: 4
+lr_gamma: 0.5
+
+class_weighting: true
+early_stopping_patience: 4
+log_interval: 20
+
+device: auto
+
+manifest_path: datasets/acnescu/classifier/manifest.csv
+output_dir: runs/classifier_v2_finetune
+
+# artifacts/ is gitignored — this default only works locally where you
+# already have the file. On Colab, override with:
+#   --finetune-from /content/drive/MyDrive/<path-to-v1-best.pth>
+finetune_from: artifacts/classifier_v1/best.pth
+train_crop_augmentation: multi_scale
+
+use_context_validation: true
+# "combined_avg" (default): checkpoint_score = (tight + context) / 2 —
+# simple, no threshold to tune, always factors regression risk in.
+# Alternative: "context_with_floor" selects purely on val_context_macro_f1
+# but disqualifies any epoch where val_tight_macro_f1 < tight_f1_floor —
+# a harder regression guard, at the cost of needing to pick a sensible
+# floor value (e.g. slightly below v1's own best val_macro_f1, ~0.81).
+checkpoint_selection_metric: combined_avg
+# tight_f1_floor: 0.65  # only used if checkpoint_selection_metric is context_with_floor
+
+# training-log warning (not a hard stop) if val_tight_macro_f1 drops more
+# than this far below the starting checkpoint's own val_macro_f1
+tight_f1_regression_tolerance: 0.10

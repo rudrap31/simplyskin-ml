@@ -9,6 +9,8 @@ Checks:
   3. Split leakage (no source image appears in more than one split)
   4. Model forward pass (correct output shape for all classes)
   5. Checkpoint save/load round-trip
+  6. Multi-scale crop dataset (classifier_v2): valid samples, scale/shift
+     math, no reach outside the train split
 
 Usage:
     python3 src/scripts/test_classifier_pipeline.py
@@ -24,7 +26,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import torch
 
 from src.data.acnescu import RAW_TO_BROAD, BROAD_CLASSES
-from src.data.acnescu_crops import MANIFEST_PATH, SPLITS_PATH, pad_and_clamp_box
+from src.data.acnescu_crops import (
+    MANIFEST_PATH,
+    SPLITS_PATH,
+    AcneSCUMultiScaleCropDataset,
+    multi_scale_crop_box,
+    pad_and_clamp_box,
+)
 from src.models.classifier import build_model
 
 
@@ -124,12 +132,54 @@ def test_checkpoint_roundtrip():
         check("checkpoint preserves class_names", checkpoint["class_names"] == BROAD_CLASSES)
 
 
+def test_multi_scale_crop_dataset():
+    print("\n6. Multi-scale crop dataset (classifier_v2)")
+    if not MANIFEST_PATH.exists():
+        print("  SKIPPED: manifest not generated yet (run build_acnescu_crops.py first)")
+        return
+
+    # scale/shift math on a synthetic box, isolated from real image I/O
+    padded_box = [100.0, 100.0, 200.0, 200.0]  # 100x100 box
+    for _ in range(50):
+        box = multi_scale_crop_box(padded_box, img_w=1000, img_h=1000, mapped_class="comedonal_like")
+        w, h = box[2] - box[0], box[3] - box[1]
+        check("sampled box (default policy) stays within [tight, 2x] area range", 90 <= w <= 210 and 90 <= h <= 210)
+        check("sampled box stays within image bounds", box[0] >= 0 and box[1] >= 0 and box[2] <= 1000 and box[3] <= 1000)
+
+    # deeper_inflammatory_like: class-specific policy caps at 1.5x, must
+    # NEVER draw 2.0x (0% weight) — this is the actual fix for the
+    # contamination finding, so it's worth checking directly, not just trusting the config
+    for _ in range(200):
+        box = multi_scale_crop_box(padded_box, img_w=1000, img_h=1000, mapped_class="deeper_inflammatory_like")
+        w = box[2] - box[0]
+        check("deeper_inflammatory_like never draws 2.0x (area > 1.5x*1.5x=225 would indicate a 2.0x draw)", w <= 150.001)
+
+    ds = AcneSCUMultiScaleCropDataset(split="train", transform=None)
+    check("dataset is non-empty", len(ds) > 0)
+
+    image, label, ann_id, source_image_id = ds[0]
+    check("returned image is a PIL Image (no transform given)", hasattr(image, "size"))
+    check("label is a valid class index", 0 <= label < len(BROAD_CLASSES))
+
+    # same index sampled twice should (almost always) differ in size,
+    # since scale is randomly redrawn on every __getitem__ call
+    sizes = {ds[0][0].size for _ in range(10)}
+    check("re-sampling the same index draws different crop scales over repeated calls", len(sizes) > 1)
+
+    try:
+        AcneSCUMultiScaleCropDataset(split="val")
+        check("val split raises (multi-scale augmentation is train-only)", False)
+    except AssertionError:
+        check("val split raises (multi-scale augmentation is train-only)", True)
+
+
 def main():
     test_coco_parsing()
     test_crop_extraction()
     test_split_leakage()
     test_model_forward_pass()
     test_checkpoint_roundtrip()
+    test_multi_scale_crop_dataset()
     print("\nAll checks passed.")
 
 
