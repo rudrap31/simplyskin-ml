@@ -1,4 +1,9 @@
-"""Lesion-crop classifier model factory. Mirrors src/models/detector.py's
+"""EXPERIMENTAL — not used by the production pipeline (see
+src/inference/detector_landmarks_pipeline.py, which pivoted to
+detector + facial landmarks with no classifier in the loop). Kept for
+reproducibility; see artifacts/README.md.
+
+Lesion-crop classifier model factory. Mirrors src/models/detector.py's
 pattern: a MODEL_REGISTRY + build_model() so a future architecture can be
 swapped in without touching the training loop.
 """

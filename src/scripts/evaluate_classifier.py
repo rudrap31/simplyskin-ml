@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
-from src.data.acnescu_crops import AcneSCUCropDataset, DATASET_ROOT
+from src.data.acnescu_crops import AcneSCUContextValDataset, AcneSCUCropDataset, DATASET_ROOT
 from src.data.classifier_transforms import get_classifier_transform
 from src.models.classifier import build_model
 from src.train.classifier_metrics import classification_report_str, compute_classification_metrics
@@ -92,6 +92,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, default="runs/classifier_baseline/best.pth")
     parser.add_argument("--manifest-path", type=str, default=str(DEFAULT_MANIFEST))
+    parser.add_argument(
+        "--eval-set", type=str, default="test", choices=["test", "context_val"],
+        help="'test': the original held-out tight test split (AcneSCUCropDataset). "
+             "'context_val': the fixed, deterministic detector-style crops (AcneSCUContextValDataset) — NOT the held-out test set.",
+    )
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--max-misclassified", type=int, default=25)
@@ -107,16 +112,22 @@ def main():
     print(f"Loaded checkpoint: {ckpt_path}")
     print(f"  epoch={checkpoint.get('epoch')}  val_macro_f1={checkpoint.get('val_macro_f1')}")
     print(f"  classes: {class_names}")
+    print(f"  eval_set: {args.eval_set}")
 
     device = resolve_device(args.device)
     print(f"device: {device}")
 
-    test_ds = AcneSCUCropDataset(
-        split="test",
-        transform=get_classifier_transform(train=False, input_size=cfg.get("input_size", 224)),
-        manifest_path=Path(args.manifest_path),
-    )
-    print(f"test crops: {len(test_ds)}")
+    if args.eval_set == "test":
+        test_ds = AcneSCUCropDataset(
+            split="test",
+            transform=get_classifier_transform(train=False, input_size=cfg.get("input_size", 224)),
+            manifest_path=Path(args.manifest_path),
+        )
+    else:
+        test_ds = AcneSCUContextValDataset(
+            transform=get_classifier_transform(train=False, input_size=cfg.get("input_size", 224)),
+        )
+    print(f"{args.eval_set} crops: {len(test_ds)}")
 
     test_loader = torch.utils.data.DataLoader(test_ds, batch_size=cfg["batch_size"], shuffle=False, num_workers=0)
 
@@ -125,7 +136,8 @@ def main():
     model.to(device)
     model.eval()
 
-    output_dir = Path(args.output_dir) if args.output_dir else ckpt_path.parent / "test_evaluation"
+    default_dirname = "test_evaluation" if args.eval_set == "test" else "context_val_evaluation"
+    output_dir = Path(args.output_dir) if args.output_dir else ckpt_path.parent / default_dirname
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_preds, all_labels, all_confidences = [], [], []
@@ -143,7 +155,10 @@ def main():
             all_confidences.append(confs.cpu())
 
             for i in range(len(labels)):
-                if preds[i].item() != labels[i].item():
+                if preds[i].item() != labels[i].item() and args.eval_set == "test":
+                    # context_val has no static crop_path (its crops are
+                    # computed on the fly from source_image + box), so the
+                    # misclassified-crop grid is test-set-only
                     ann_id = ann_ids[i]
                     row = next(r for r in test_ds.rows if r["annotation_id"] == ann_id)
                     misclassified.append(
@@ -158,14 +173,15 @@ def main():
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
+    num_misclassified = (all_preds != all_labels).sum().item()
 
     metrics = compute_classification_metrics(all_preds, all_labels, class_names)
 
     print("\n" + "=" * 60)
-    print(f"Test accuracy:       {metrics['accuracy']:.4f}")
-    print(f"Test macro precision: {metrics['macro_precision']:.4f}")
-    print(f"Test macro recall:    {metrics['macro_recall']:.4f}")
-    print(f"Test macro F1:        {metrics['macro_f1']:.4f}")
+    print(f"{args.eval_set} accuracy:       {metrics['accuracy']:.4f}")
+    print(f"{args.eval_set} macro precision: {metrics['macro_precision']:.4f}")
+    print(f"{args.eval_set} macro recall:    {metrics['macro_recall']:.4f}")
+    print(f"{args.eval_set} macro F1:        {metrics['macro_f1']:.4f}")
     print("=" * 60)
     report = classification_report_str(metrics)
     print(report)
@@ -177,8 +193,9 @@ def main():
         json.dump(
             {
                 "checkpoint": str(ckpt_path),
-                "num_test_crops": len(test_ds),
-                "num_misclassified": len(misclassified),
+                "eval_set": args.eval_set,
+                "num_crops": len(test_ds),
+                "num_misclassified": num_misclassified,
                 **{k: v for k, v in metrics.items() if k != "confusion_matrix"},
                 "confusion_matrix": metrics["confusion_matrix"],
             },
@@ -187,13 +204,14 @@ def main():
         )
 
     plot_confusion_matrix(metrics["confusion_matrix"], class_names, output_dir / "confusion_matrix.png")
-    save_misclassified_grid(misclassified, output_dir, max_images=args.max_misclassified)
+    if args.eval_set == "test":
+        save_misclassified_grid(misclassified, output_dir, max_images=args.max_misclassified)
 
-    print(f"\nMisclassified: {len(misclassified)}/{len(test_ds)}")
+    print(f"\nMisclassified: {num_misclassified}/{len(test_ds)}")
     print(f"Saved: {output_dir / 'classification_report.txt'}")
     print(f"Saved: {output_dir / 'test_metrics.json'}")
     print(f"Saved: {output_dir / 'confusion_matrix.png'}")
-    if misclassified:
+    if args.eval_set == "test" and misclassified:
         print(f"Saved: {output_dir / 'misclassified_examples.jpg'}")
 
 

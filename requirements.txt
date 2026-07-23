@@ -9,3 +9,5 @@ pandas
 pyyaml
 tqdm
 scikit-learn
+mediapipe
+shapely

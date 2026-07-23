@@ -1,4 +1,8 @@
-"""Main training entrypoint for the AcneSCU lesion-crop classifier
+"""EXPERIMENTAL — not used by the production pipeline (see
+src/inference/detector_landmarks_pipeline.py). Kept for reproducibility;
+see artifacts/README.md.
+
+Main training entrypoint for the AcneSCU lesion-crop classifier
 (classifier v1: comedonal_like / inflammatory_like / deeper_inflammatory_like
 / non_active_acne). Detector v1 is frozen — this trains an independent
 downstream model on cropped lesion images.
