@@ -14,3 +14,9 @@ runs/
 *.pt
 models/
 *.task
+
+# backend (temporarily copied into this repo for ML integration work)
+backend/.env
+backend/node_modules/
+backend/**/.env
+.env
